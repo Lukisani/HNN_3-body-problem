@@ -107,12 +107,20 @@ def rotate3d(p, theta, axis):
     return (R @ p.reshape(3, 1)).squeeze()
 
 def random_config(nu=2e-1, min_radius=0.9, max_radius=1.2):
+    '''Near-circular equilateral-triangle configuration in a random 3D orientation.
+
+    The triangle is built in the xy-plane, where the circular-orbit velocities are
+    correct, and then the whole configuration (positions and velocities) is rotated
+    by one random 3D rotation. (The old version rotated a random 3D position vector
+    about the z-axis, which only gives a proper equilateral triangle when that vector
+    lies in the xy-plane. Otherwise the bodies started too close together and with
+    sub-circular speeds, so they collapsed into close encounters with huge forces.)'''
     state = np.zeros((3, 7))
     state[:, 0] = 1  # Masses
-    p1 = 2 * np.random.rand(3) - 1
     r = np.random.rand() * (max_radius - min_radius) + min_radius
-    
-    p1 *= r / np.sqrt(np.sum((p1**2)))
+
+    alpha = 2 * np.pi * np.random.rand()
+    p1 = r * np.array([np.cos(alpha), np.sin(alpha), 0.0])
     p2 = rotate3d(p1, theta=2*np.pi/3, axis='z')
     p3 = rotate3d(p2, theta=2*np.pi/3, axis='z')
 
@@ -121,13 +129,17 @@ def random_config(nu=2e-1, min_radius=0.9, max_radius=1.2):
     v2 = rotate3d(v1, theta=2*np.pi/3, axis='z')
     v3 = rotate3d(v2, theta=2*np.pi/3, axis='z')
 
-    v1 *= 1 + nu * (2*np.random.rand(3) - 1)
-    v2 *= 1 + nu * (2*np.random.rand(3) - 1)
-    v3 *= 1 + nu * (2*np.random.rand(3) - 1)
+    v1 = v1 * (1 + nu * (2*np.random.rand(3) - 1))
+    v2 = v2 * (1 + nu * (2*np.random.rand(3) - 1))
+    v3 = v3 * (1 + nu * (2*np.random.rand(3) - 1))
 
-    state[0, 1:4], state[0, 4:7] = p1, v1
-    state[1, 1:4], state[1, 4:7] = p2, v2
-    state[2, 1:4], state[2, 4:7] = p3, v3
+    # One random rotation applied to everything, so orbits point in random directions
+    Q, _ = np.linalg.qr(np.random.randn(3, 3))
+    if np.linalg.det(Q) < 0:
+        Q[:, 0] *= -1
+
+    for i, (p, v) in enumerate([(p1, v1), (p2, v2), (p3, v3)]):
+        state[i, 1:4], state[i, 4:7] = Q @ p, Q @ v
     return state
 
 

@@ -465,6 +465,8 @@ def visualize_energy_conservation(base_model, hnn_model, args):
 
 def plot_training_curves():
 
+    args = ObjectView(get_args())
+    
     base_stats = from_pickle('{}/3body-orbits-baseline.pkl'.format(EXPERIMENT_DIR))
     hnn_stats = from_pickle('{}/3body-orbits-hnn.pkl'.format(EXPERIMENT_DIR))
 
