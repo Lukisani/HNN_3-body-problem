@@ -10,3 +10,5 @@
 *.zip
 *.pkl
 __pycache__
+.venv/
+figures/
