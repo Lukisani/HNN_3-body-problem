@@ -12,8 +12,6 @@ sys.path.append(parent_dir)
 
 from utils import to_pickle, from_pickle
 from tqdm import tqdm
-import multiprocessing as mp
-from functools import partial
 
 ##### ENERGY #####
 def potential_energy(state):
@@ -41,7 +39,7 @@ def total_energy(state):
 
 
 ##### DYNAMICS #####
-def get_accelerations(state, epsilon=1e-6):
+def get_accelerations(state, epsilon=1e-3):
     # shape of state is [bodies x properties]
     net_accs = [] # [nbodies x 2]
     for i in range(state.shape[0]): # number of bodies
@@ -66,7 +64,7 @@ def update(t, state):
 ##### INTEGRATION SETTINGS #####
 def get_orbit(state, update_fn=update, t_points=100, t_span=[0,2], nbodies=3, **kwargs):
     if not 'rtol' in kwargs.keys():
-        kwargs['rtol'] = 1e-9 # was -9 before...
+        kwargs['rtol'] = 1e-6 # was -9 before...
 
     orbit_settings = locals()
 
@@ -77,7 +75,7 @@ def get_orbit(state, update_fn=update, t_points=100, t_span=[0,2], nbodies=3, **
     path = solve_ivp(fun=update_fn, t_span=t_span, y0=state.flatten(),
                      t_eval=t_eval,  **kwargs)
     orbit = path['y'].reshape(nbodies, 7, t_points)
-    # print('data3dcanonical getorbit')
+    print('data3dgetorbit')
     return orbit, orbit_settings
 
 
@@ -119,83 +117,54 @@ def random_config(nu=2e-1, min_radius=0.9, max_radius=1.2):
     return state
 
 
-##### ONE TRIAL, RUN IN A WORKER PROCESS #####
-def _generate_trial(seed, timesteps, nbodies, orbit_noise, min_radius, max_radius, t_span, kwargs):
-    '''Generate a single orbit and return its canonical coords/derivatives/energy
-    for every sampled timestep. Runs standalone in a worker process, so it must
-    seed its own RNG -- otherwise forked workers can inherit the same numpy
-    random state and end up generating duplicate orbits.'''
-    np.random.seed(seed)
-
-    state = random_config(nu=orbit_noise, min_radius=min_radius, max_radius=max_radius)
-    orbit, _ = get_orbit(state, t_points=timesteps, t_span=t_span, nbodies=nbodies, **kwargs)
-    batch = orbit.transpose(2, 0, 1).reshape(-1, nbodies * 7)
-
-    xs, dxs, es = [], [], []
-    for state_flat in batch:
-        # Get derivatives first (needs original state with velocities)
-        dstate_flat = update(None, state_flat)
-        # Convert flat state to [nbodies, 7] where 7 = [mass, qx, qy, qz, vx, vy, vz]
-        state_reshaped = state_flat.reshape(nbodies, 7)
-
-        # --- Critical fix: Compute canonical coordinates (q, p) instead of (q, v) ---
-        mass = state_reshaped[:, 0]          # Shape (3,)
-        positions = state_reshaped[:, 1:4]   # Shape (3, 3)
-        velocities = state_reshaped[:, 4:7]  # Shape (3, 3)
-        momenta = mass[:, None] * velocities  # p = m*v, shape (3, 3)
-
-        # Concatenate [positions, momenta] and flatten
-        canonical_coords = np.hstack([positions, momenta]).flatten()  # Shape (18,)
-
-        # Process derivatives similarly
-        dstate_reshaped = dstate_flat.reshape(nbodies, 7)
-        d_positions = dstate_reshaped[:, 1:4]     # dq/dt = v (already correct)
-        d_velocities = dstate_reshaped[:, 4:7]    # dv/dt = acceleration
-        d_momenta = mass[:, None] * d_velocities  # dp/dt = m*dv/dt
-        d_canonical_coords = np.hstack([d_positions, d_momenta]).flatten()
-
-        xs.append(canonical_coords)
-        dxs.append(d_canonical_coords)
-
-        # Energy computation remains unchanged
-        shaped_state = state_flat.copy().reshape(nbodies, 7, 1)
-        es.append(total_energy(shaped_state))
-
-    return xs, dxs, es
-
-
 ##### INTEGRATE AN ORBIT OR TWO #####
 def sample_orbits(timesteps=20, trials=5000, nbodies=3, orbit_noise=2e-1,
-                  min_radius=0.9, max_radius=1.2, t_span=[0, 5], verbose=False,
-                  num_workers=None, **kwargs): #trials were at 5000 before and timesteps at 20 - reduced to make dataset generation faster
-
+                  min_radius=0.9, max_radius=1.2, t_span=[0, 5], verbose=False, **kwargs): #trials were at 5000 before and timesteps at 20 - reduced to make dataset generation faster
+    
     orbit_settings = locals()
     if verbose:
         print("Making a dataset of near-circular 3-body orbits:")
-
-    N = timesteps * trials
-    num_workers = num_workers or os.cpu_count() or 1
-
-    # Each trial gets its own seed, derived from a random base seed, so that
-    # parallel worker processes don't end up producing correlated orbits.
-    base_seed = np.random.randint(0, 2**31 - 1)
-    seeds = [int(base_seed + i) for i in range(trials)]
-
-    worker = partial(_generate_trial, timesteps=timesteps, nbodies=nbodies,
-                      orbit_noise=orbit_noise, min_radius=min_radius,
-                      max_radius=max_radius, t_span=t_span, kwargs=kwargs)
-
+    
     x, dx, e = [], [], []
-    if num_workers > 1:
-        with mp.Pool(num_workers) as pool:
-            results = pool.imap(worker, seeds)
-            for xs, dxs, es in tqdm(results, total=trials, desc="Generating orbits"):
-                x.extend(xs); dx.extend(dxs); e.extend(es)
-    else:
-        # num_workers=1 keeps the old single-process behaviour (e.g. for debugging)
-        for seed in tqdm(seeds, desc="Generating orbits"):
-            xs, dxs, es = worker(seed)
-            x.extend(xs); dx.extend(dxs); e.extend(es)
+    N = timesteps*trials
+    with tqdm(total=trials, desc="Generating orbits") as pbar:
+        while len(x) < N:
+
+            state = random_config(nu=orbit_noise, min_radius=min_radius, max_radius=max_radius)
+            orbit, settings = get_orbit(state, t_points=timesteps, t_span=t_span, nbodies=nbodies, **kwargs)
+            batch = orbit.transpose(2,0,1).reshape(-1,nbodies*7)
+
+            for state_flat in batch:
+                # Get derivatives first (needs original state with velocities)
+                dstate_flat = update(None, state_flat)
+                 # Convert flat state to [nbodies, 7] where 7 = [mass, qx, qy, qz, vx, vy, vz]
+                state_reshaped = state_flat.reshape(nbodies, 7)
+                
+                # --- Critical fix: Compute canonical coordinates (q, p) instead of (q, v) ---
+                mass = state_reshaped[:, 0]          # Shape (3,)
+                positions = state_reshaped[:, 1:4]    # Shape (3, 3)
+                velocities = state_reshaped[:, 4:7]   # Shape (3, 3)
+                momenta = mass[:, None] * velocities  # p = m*v, shape (3, 3)
+                
+                # Concatenate [positions, momenta] and flatten
+                canonical_coords = np.hstack([positions, momenta]).flatten()  # Shape (18,)
+                
+                # Process derivatives similarly
+                dstate_reshaped = dstate_flat.reshape(nbodies, 7)
+                d_positions = dstate_reshaped[:, 1:4]   # dq/dt = v (already correct)
+                d_velocities = dstate_reshaped[:, 4:7]  # dv/dt = acceleration
+                d_momenta = mass[:, None] * d_velocities  # dp/dt = m*dv/dt
+                d_canonical_coords = np.hstack([d_positions, d_momenta]).flatten()
+                
+                # Append to dataset
+                x.append(canonical_coords)
+                dx.append(d_canonical_coords)
+                
+                # Energy computation remains unchanged
+                shaped_state = state_flat.copy().reshape(nbodies, 7, 1)
+                e.append(total_energy(shaped_state))
+            pbar.update(1)
+    
 
     data = {'coords': np.stack(x)[:N],
             'dcoords': np.stack(dx)[:N],
