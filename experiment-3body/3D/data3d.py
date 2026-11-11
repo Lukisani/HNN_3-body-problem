@@ -144,46 +144,57 @@ def random_config(nu=2e-1, min_radius=0.9, max_radius=1.2):
 
 
 ##### ONE TRIAL, RUN IN A WORKER PROCESS #####
-def _generate_trial(seed, timesteps, nbodies, orbit_noise, min_radius, max_radius, t_span, kwargs):
+# Orbits containing a derivative larger than this (i.e. close encounters between bodies)
+# are thrown away and regenerated. In tests this affects about 4% of orbits. Pass
+# max_derivative=None to sample_orbits() to keep everything.
+MAX_DERIVATIVE = 20.0
+
+def _generate_trial(seed, timesteps, nbodies, orbit_noise, min_radius, max_radius, t_span, kwargs,
+                    max_derivative=MAX_DERIVATIVE):
     '''Generate a single orbit and return its canonical coords/derivatives/energy
     for every sampled timestep. Runs standalone in a worker process, so it must
     seed its own RNG -- otherwise forked workers can inherit the same numpy
     random state and end up generating duplicate orbits.'''
     np.random.seed(seed)
 
-    state = random_config(nu=orbit_noise, min_radius=min_radius, max_radius=max_radius)
-    orbit, _ = get_orbit(state, t_points=timesteps, t_span=t_span, nbodies=nbodies, **kwargs)
-    batch = orbit.transpose(2, 0, 1).reshape(-1, nbodies * 7)
+    for attempt in range(50):
+        state = random_config(nu=orbit_noise, min_radius=min_radius, max_radius=max_radius)
+        orbit, _ = get_orbit(state, t_points=timesteps, t_span=t_span, nbodies=nbodies, **kwargs)
+        batch = orbit.transpose(2, 0, 1).reshape(-1, nbodies * 7)
 
-    xs, dxs, es = [], [], []
-    for state_flat in batch:
-        # Get derivatives first (needs original state with velocities)
-        dstate_flat = update(None, state_flat)
-        # Convert flat state to [nbodies, 7] where 7 = [mass, qx, qy, qz, vx, vy, vz]
-        state_reshaped = state_flat.reshape(nbodies, 7)
+        xs, dxs, es = [], [], []
+        for state_flat in batch:
+            # Get derivatives first (needs original state with velocities)
+            dstate_flat = update(None, state_flat)
+            # Convert flat state to [nbodies, 7] where 7 = [mass, qx, qy, qz, vx, vy, vz]
+            state_reshaped = state_flat.reshape(nbodies, 7)
 
-        # --- Critical fix: Compute canonical coordinates (q, p) instead of (q, v) ---
-        mass = state_reshaped[:, 0]          # Shape (3,)
-        positions = state_reshaped[:, 1:4]   # Shape (3, 3)
-        velocities = state_reshaped[:, 4:7]  # Shape (3, 3)
-        momenta = mass[:, None] * velocities  # p = m*v, shape (3, 3)
+            # --- Critical fix: Compute canonical coordinates (q, p) instead of (q, v) ---
+            mass = state_reshaped[:, 0]          # Shape (3,)
+            positions = state_reshaped[:, 1:4]   # Shape (3, 3)
+            velocities = state_reshaped[:, 4:7]  # Shape (3, 3)
+            momenta = mass[:, None] * velocities  # p = m*v, shape (3, 3)
 
-        # Concatenate [positions, momenta] and flatten
-        canonical_coords = np.hstack([positions, momenta]).flatten()  # Shape (18,)
+            # Concatenate [positions, momenta] and flatten
+            canonical_coords = np.hstack([positions, momenta]).flatten()  # Shape (18,)
 
-        # Process derivatives similarly
-        dstate_reshaped = dstate_flat.reshape(nbodies, 7)
-        d_positions = dstate_reshaped[:, 1:4]     # dq/dt = v (already correct)
-        d_velocities = dstate_reshaped[:, 4:7]    # dv/dt = acceleration
-        d_momenta = mass[:, None] * d_velocities  # dp/dt = m*dv/dt
-        d_canonical_coords = np.hstack([d_positions, d_momenta]).flatten()
+            # Process derivatives similarly
+            dstate_reshaped = dstate_flat.reshape(nbodies, 7)
+            d_positions = dstate_reshaped[:, 1:4]     # dq/dt = v (already correct)
+            d_velocities = dstate_reshaped[:, 4:7]    # dv/dt = acceleration
+            d_momenta = mass[:, None] * d_velocities  # dp/dt = m*dv/dt
+            d_canonical_coords = np.hstack([d_positions, d_momenta]).flatten()
 
-        xs.append(canonical_coords)
-        dxs.append(d_canonical_coords)
+            xs.append(canonical_coords)
+            dxs.append(d_canonical_coords)
 
-        # Energy computation remains unchanged
-        shaped_state = state_flat.copy().reshape(nbodies, 7, 1)
-        es.append(total_energy(shaped_state))
+            # Energy computation remains unchanged
+            shaped_state = state_flat.copy().reshape(nbodies, 7, 1)
+            es.append(total_energy(shaped_state))
+
+        # Accept the orbit unless it contains an extreme derivative (close encounter)
+        if max_derivative is None or np.abs(np.array(dxs)).max() <= max_derivative:
+            break
 
     return xs, dxs, es
 
@@ -191,7 +202,7 @@ def _generate_trial(seed, timesteps, nbodies, orbit_noise, min_radius, max_radiu
 ##### INTEGRATE AN ORBIT OR TWO #####
 def sample_orbits(timesteps=20, trials=5000, nbodies=3, orbit_noise=2e-1,
                   min_radius=0.9, max_radius=1.2, t_span=[0, 5], verbose=False,
-                  num_workers=None, **kwargs): #trials were at 5000 before and timesteps at 20 - reduced to make dataset generation faster
+                  num_workers=None, max_derivative=MAX_DERIVATIVE, **kwargs): #trials were at 5000 before and timesteps at 20 - reduced to make dataset generation faster
 
     orbit_settings = locals()
     if verbose:
@@ -209,7 +220,8 @@ def sample_orbits(timesteps=20, trials=5000, nbodies=3, orbit_noise=2e-1,
 
     worker = partial(_generate_trial, timesteps=timesteps, nbodies=nbodies,
                       orbit_noise=orbit_noise, min_radius=min_radius,
-                      max_radius=max_radius, t_span=t_span, kwargs=kwargs)
+                      max_radius=max_radius, t_span=t_span, kwargs=kwargs,
+                      max_derivative=max_derivative)
 
     x, dx, e = [], [], []
     if num_workers > 1:

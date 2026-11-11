@@ -354,6 +354,9 @@ def visualize_all_orbits(base_model, hnn_model, args):
 
 
 def visualize_all_energies(base_model, hnn_model, args, plot3d=False):
+    # Needs base_orbit / hnn_orbit, so run what_has_baseline_learned() and
+    # what_has_hnn_learned() first.
+    from matplotlib.lines import Line2D
 
     np.random.seed(0)
     t_points = 2000
@@ -362,12 +365,10 @@ def visualize_all_energies(base_model, hnn_model, args, plot3d=False):
 
     orbit, settings = get_orbit(state, t_points=t_points, t_span=t_span)
 
-    tail=10000; pfrac=0.05
-    fs=13; tpad=6; lw=2; ms=30
+    tail=10000; pfrac=0.6   # extra vertical room so the models' energy drift stays visible
+    fs=13; tpad=6; lw=2
 
     k = 1600
-    fig = plt.figure(figsize=[15,4], dpi=100)
-
     tstart = max(0, k-tail)
 
     real_pe = potential_energy(orbit[...,tstart:k])
@@ -381,35 +382,33 @@ def visualize_all_energies(base_model, hnn_model, args, plot3d=False):
 
     t = settings['t_eval'][tstart:k]
 
-    plt.subplot(1,3,1)
-    plt.title('Ground truth', fontsize=fs, pad=tpad)
-    plt.plot(t, real_ke,'k--', linewidth=lw, label='Kinetic')
-    plt.plot(t, real_pe,'k:', linewidth=lw, label='Potential')
-    plt.plot(t, real_etot,'k-', linewidth=lw, label='Total')
-    # plt.xlabel('Time', fontsize=12) #; plt.ylabel("Energy")
-    plt.ylim(ymin, ymax)
-    plt.legend(fontsize=7, loc='center right')
+    fig, axes = plt.subplots(1, 3, figsize=[15, 4.8], dpi=100, sharey=True)
+    panels = [('Ground truth', orbit, 'k'),
+              ('Baseline NN', base_orbit, 'r'),
+              ('Hamiltonian NN', hnn_orbit, 'b')]
 
-    plt.subplot(1,3,2)
-    plt.title('Baseline NN', fontsize=fs, pad=tpad)
-    plt.plot(t, kinetic_energy(base_orbit[...,tstart:k]), 'r--', linewidth=lw, label='Kinetic')
-    plt.plot(t, potential_energy(base_orbit[...,tstart:k]), 'r:', linewidth=lw, label='Potential')
-    plt.plot(t, total_energy(base_orbit[...,tstart:k]), 'r-', linewidth=lw, label='Total')
-    plt.ylim(ymin, ymax)
-    # plt.xlabel('Time') ; plt.ylabel("Energy")
-    plt.legend(fontsize=7, loc='center right')
+    for ax, (title, orb, c) in zip(axes, panels):
+        ax.plot(t, kinetic_energy(orb[...,tstart:k]), c + '--', linewidth=lw)
+        ax.plot(t, potential_energy(orb[...,tstart:k]), c + ':', linewidth=lw)
+        ax.plot(t, total_energy(orb[...,tstart:k]), c + '-', linewidth=lw)
+        if title != 'Ground truth':
+            # grey line = the true (conserved) total energy, to see how far each model drifts
+            ax.axhline(real_etot.mean(), color='gray', linewidth=1, alpha=0.7)
+        ax.set_title(title, fontsize=fs, pad=tpad)
+        ax.set_xlabel('Time')
+        ax.set_ylim(ymin, ymax)
+    axes[0].set_ylabel('Energy')
 
-    plt.subplot(1,3,3)
-    plt.title('Hamiltonian NN', fontsize=fs, pad=tpad)
-    plt.plot(t, kinetic_energy(hnn_orbit[...,tstart:k]),'b--', linewidth=lw, label='Kinetic')
-    plt.plot(t, potential_energy(hnn_orbit[...,tstart:k]), 'b:', linewidth=lw, label='Potential')
-    plt.plot(t, total_energy(hnn_orbit[...,tstart:k]), 'b-', linewidth=lw, label='Total')
-    plt.ylim(ymin, ymax)
-    # plt.xlabel('Time') ; plt.ylabel("Energy")
-    plt.legend(fontsize=7, loc='center right')
+    # One shared legend below the plots, so it never covers the curves
+    handles = [Line2D([0], [0], color='k', linestyle='--', linewidth=lw, label='Kinetic'),
+               Line2D([0], [0], color='k', linestyle=':', linewidth=lw, label='Potential'),
+               Line2D([0], [0], color='k', linestyle='-', linewidth=lw, label='Total'),
+               Line2D([0], [0], color='gray', linestyle='-', linewidth=1, label='True total energy')]
+    fig.legend(handles=handles, loc='lower center', ncol=4, fontsize=10, frameon=False)
+    fig.tight_layout(rect=[0, 0.08, 1, 1])
 
-    plt.tight_layout() ; fig.savefig('{}/3body-energy-compare.{}'.format(args.fig_dir, FORMAT))
-    print('Figure saved in:', PARENT_DIR + args.fig_dir, 'as', '3body-base-example.{}'.format(FORMAT))
+    fig.savefig('{}/3body-energy-compare.{}'.format(args.fig_dir, FORMAT))
+    print('Figure saved in:', PARENT_DIR + args.fig_dir, 'as', '3body-energy-compare.{}'.format(FORMAT))
 
 
 def visualize_energy_conservation(base_model, hnn_model, args):
@@ -466,9 +465,10 @@ def visualize_energy_conservation(base_model, hnn_model, args):
 def plot_training_curves():
 
     args = ObjectView(get_args())
-    
-    base_stats = from_pickle('{}/3body-orbits-baseline.pkl'.format(EXPERIMENT_DIR))
-    hnn_stats = from_pickle('{}/3body-orbits-hnn.pkl'.format(EXPERIMENT_DIR))
+
+    # The training script saves these next to the models, in args.save_dir (experiment-3body/3D)
+    base_stats = from_pickle('{}/3body-orbits-baseline.pkl'.format(args.save_dir))
+    hnn_stats = from_pickle('{}/3body-orbits-hnn.pkl'.format(args.save_dir))
 
     fig = plt.figure(figsize=[5,3], dpi=DPI)
 
