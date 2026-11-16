@@ -106,7 +106,14 @@ def rotate3d(p, theta, axis):
         R[:2, :2] = [[c, -s], [s, c]]
     return (R @ p.reshape(3, 1)).squeeze()
 
-def random_config(nu=2e-1, min_radius=0.9, max_radius=1.2):
+# Size of the random out-of-plane velocity kick, as a fraction of each body's speed.
+# Without it every orbit stays exactly in one plane (three bodies with in-plane
+# velocities never leave their plane), so the 3D model would only ever see planar
+# motion. 0.2 gives typical out-of-plane excursions of about 0.1 (orbit radius ~1)
+# without making close encounters more common.
+OUT_OF_PLANE_NOISE = 0.2
+
+def random_config(nu=2e-1, min_radius=0.9, max_radius=1.2, nu_z=OUT_OF_PLANE_NOISE):
     '''Near-circular equilateral-triangle configuration in a random 3D orientation.
 
     The triangle is built in the xy-plane, where the circular-orbit velocities are
@@ -114,7 +121,11 @@ def random_config(nu=2e-1, min_radius=0.9, max_radius=1.2):
     by one random 3D rotation. (The old version rotated a random 3D position vector
     about the z-axis, which only gives a proper equilateral triangle when that vector
     lies in the xy-plane. Otherwise the bodies started too close together and with
-    sub-circular speeds, so they collapsed into close encounters with huge forces.)'''
+    sub-circular speeds, so they collapsed into close encounters with huge forces.)
+
+    nu_z adds a random velocity component perpendicular to the triangle's plane, so
+    the motion is genuinely 3D. The total momentum is then set to zero, so the
+    system's centre of mass stays at the origin instead of drifting.'''
     state = np.zeros((3, 7))
     state[:, 0] = 1  # Masses
     r = np.random.rand() * (max_radius - min_radius) + min_radius
@@ -132,6 +143,15 @@ def random_config(nu=2e-1, min_radius=0.9, max_radius=1.2):
     v1 = v1 * (1 + nu * (2*np.random.rand(3) - 1))
     v2 = v2 * (1 + nu * (2*np.random.rand(3) - 1))
     v3 = v3 * (1 + nu * (2*np.random.rand(3) - 1))
+
+    # Out-of-plane kick: the triangle lies in the xy-plane here, so this is the z-component
+    for v in (v1, v2, v3):
+        speed = np.linalg.norm(v)
+        v[2] += nu_z * speed * (2*np.random.rand() - 1)
+
+    # Zero total momentum (equal masses), so the centre of mass doesn't drift
+    v_mean = (v1 + v2 + v3) / 3
+    v1, v2, v3 = v1 - v_mean, v2 - v_mean, v3 - v_mean
 
     # One random rotation applied to everything, so orbits point in random directions
     Q, _ = np.linalg.qr(np.random.randn(3, 3))
