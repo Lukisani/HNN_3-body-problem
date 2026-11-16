@@ -111,7 +111,7 @@ def rotate3d(p, theta, axis):
 # velocities never leave their plane), so the 3D model would only ever see planar
 # motion. 0.2 gives typical out-of-plane excursions of about 0.1 (orbit radius ~1)
 # without making close encounters more common.
-OUT_OF_PLANE_NOISE = 0.2
+OUT_OF_PLANE_NOISE = 0.3
 
 def random_config(nu=2e-1, min_radius=0.9, max_radius=1.2, nu_z=OUT_OF_PLANE_NOISE):
     '''Near-circular equilateral-triangle configuration in a random 3D orientation.
