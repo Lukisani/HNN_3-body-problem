@@ -11,7 +11,7 @@ sys.path.append(PARENT_DIR)
 
 from nn_models import MLP
 from hnn3d import HNN
-from data3d import get_dataset
+from data3dcanonical import get_dataset
 from utils import L2_loss, to_pickle, from_pickle
 
 def get_args():
