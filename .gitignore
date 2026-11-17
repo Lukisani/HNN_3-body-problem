@@ -12,4 +12,4 @@
 __pycache__
 .venv/
 figures/
-seeds_runs/
+seed_runs/
