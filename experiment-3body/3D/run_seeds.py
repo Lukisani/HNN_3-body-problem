@@ -15,7 +15,7 @@ PARENT_DIR = os.path.dirname(os.path.dirname(THIS_DIR))
 sys.path.append(PARENT_DIR)
 sys.path.append(THIS_DIR)
 
-import train3DtestcodeTesting as T
+import train3d as T
 from data3dcanonical import sample_orbits, MAX_DERIVATIVE
 
 

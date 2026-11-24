@@ -19,7 +19,7 @@ PARENT_DIR = os.path.dirname(os.path.dirname(THIS_DIR))
 sys.path.append(PARENT_DIR)
 sys.path.append(THIS_DIR)
 
-import train3DtestcodeTesting as T
+import train3d as T
 from nn_models import MLP
 from hnn3d import HNN
 from data3dcanonical import random_config, get_orbit, update, MAX_DERIVATIVE

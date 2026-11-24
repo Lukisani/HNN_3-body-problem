@@ -1,123 +1,135 @@
-Hamiltonian Neural Networks
-=======
-Sam Greydanus, Misko Dzamba, Jason Yosinski | 2019
+# Hamiltonian Neural Networks for the 3D Three-Body Problem
 
-* Paper: [arxiv.org/abs/1906.01563](https://arxiv.org/abs/1906.01563)
-* Blog: [greydanus.github.io/2019/05/15/hamiltonian-nns/](https://greydanus.github.io/2019/05/15/hamiltonian-nns/)
+This project extends Hamiltonian Neural Networks (HNNs) from the original 2D experiments of [Greydanus, Dzamba and Yosinski (2019)](https://arxiv.org/abs/1906.01563) to three gravitating bodies moving in 3D. It compares an HNN with a plain neural network of the same size, and both with standard numerical integrators.
 
-![overall-idea.png](static/overall-idea.png)
+On unseen orbits, over 5 independently trained models of each kind, the HNN predicts the dynamics about **3 times more accurately** than the plain network and conserves energy about **10 times better** over a rollout. Integrators that are given the true equations of motion remain far more accurate than either network.
 
-Basic usage
---------
+![Learned models against integrators that use the true equations](experiment-3body/3D/seed_runs/compare_methods.png)
 
-To train a Hamiltonian Neural Network (HNN):
- * Task 1: Ideal mass-spring system: `python3 experiment-spring/train.py --verbose`
- * Task 2: Ideal pendulum: `python3 experiment-pend/train.py --verbose`
- * Task 3: Real pendulum (from this [Science](http://science.sciencemag.org/content/324/5923/81) paper): `python3 experiment-real/train.py --verbose`
- * Task 4: Two-body problem: `python3 experiment-2body/train.py --verbose`
- * Task 4b: Three-body problem: `python3 experiment-3body/train.py --verbose`
- * Task 5: Pixel pendulum (from OpenAI Gym): `python3 experiment-pixels/train.py --verbose`
+## Results
 
-To analyze results
- * Task 1: Ideal mass-spring system: [`analyze-spring.ipnyb`](analyze-spring.ipynb)
- * Task 2: Ideal pendulum: [`analyze-pend.ipnyb`](analyze-pend.ipynb)
- * Task 3: Real pendulum: [`analyze-real.ipnyb`](analyze-real.ipynb)
- * Task 4: Two-body problem: [`analyze-2body.ipnyb`](analyze-2body.ipynb)
- * Task 4b: Three-body problem: [`analyze-3body.ipnyb`](analyze-3body.ipynb)
- * Task 5: Pixel pendulum: [`analyze-pixels.ipnyb`](analyze-pixels.ipynb)
+All numbers are the mean ± standard deviation over 5 random seeds, measured on test orbits that the models never saw. Rollouts run from $t = 0$ to $t = 5$ with a fixed step of 0.01, for 500 orbits.
 
-Summary
---------
+| Measure | Baseline NN | HNN | RK4, true equations | Leapfrog, true equations |
+|---|---|---|---|---|
+| Derivative error (mean squared error) | 0.0523 ± 0.0002 | 0.0170 ± 0.0010 | | |
+| Relative energy drift at $t = 5$ (median) | 1.30 ± 0.16 | 0.133 ± 0.037 | $8.3\times10^{-8}$ | $6.7\times10^{-6}$ |
+| Position error at $t = 5$ (median) | 2.08 ± 0.08 | 0.72 ± 0.16 | $3.6\times10^{-10}$ | $8.5\times10^{-5}$ |
+| Time for 500 rollouts (s) | 0.94 | 1.71 | 0.70 | 0.26 |
 
-Even though neural networks enjoy widespread use, they still struggle to learn the basic laws of physics. How might we endow them with better inductive biases? In this paper, we draw inspiration from Hamiltonian mechanics to train models that learn and respect exact conservation laws in an unsupervised manner. We evaluate our models on problems where conservation of energy is important, including the two-body problem and pixel observations of a pendulum. Our model trains faster and generalizes better than a regular neural network. An interesting side effect is that our model is perfectly reversible in time.
+- **The HNN beats the plain network on every seed.** Its derivative error is 2.9 to 3.4 times lower, and its energy drift 7 to 12 times lower.
+- **Numerical methods win outright.** RK4 and leapfrog know the exact forces, so they are four to nine orders of magnitude more accurate than either network, and no slower. The comparison measures how much accuracy is lost by learning the dynamics from data; the HNN loses much less than the plain network.
+- **Neither network handles close encounters.** On test samples with very large forces, which were excluded from training, both networks' errors are about four orders of magnitude larger.
 
+Energy drift is measured against the true energy $E$:
 
-The HNN recipe
---------
+$$
+\delta(t) = \frac{\lvert E(t) - E(0)\rvert}{\lvert E(0)\rvert}
+$$
 
-1. Make a dataset of pixel-space observations of a physical system where energy is conserved. Here we're working with a pendulum.
+![Energy drift of the baseline and the HNN over a rollout](experiment-3body/3D/seed_runs/energy_drift.png)
 
-![pendulum-dataset.gif.png](static/pendulum-dataset.gif.png)
+## How it works
 
-2. Train an autoencoder on the dataset. The autoencoder is a bit unusual: its latent representation gets fed to the HNN, which tries to model the system's dynamics in latent space.
+### The system
 
-![autoencoder-hnn.png](static/autoencoder-hnn.png)
+Three bodies of unit mass attract each other by gravity ($G = 1$). The state is the position $\mathbf{q}_i$ and momentum $\mathbf{p}_i$ of each body, 18 numbers in total. The total energy, written in terms of these, is the Hamiltonian:
 
-3. Since the HNN uses the latent representation to model dynamics, we can think of the latent factors as being analogous to canonical coordinates (e.g. position and velocity).
+$$
+H = \sum_{i=1}^{3} \frac{\lvert\mathbf{p}_i\rvert^2}{2m_i} - \sum_{i<j} \frac{G\, m_i m_j}{\lvert\mathbf{q}_i - \mathbf{q}_j\rvert}
+$$
 
-![latents-hnn.png](static/latents-hnn.png)
+It generates the motion through Hamilton's equations:
 
-4. [Phase space plots](https://en.wikiversity.org/wiki/Advanced_Classical_Mechanics/Phase_Space) are a common way to visualize Hamiltonians. We can make a phase space plot in the autoencoder's latent space. We can also integrate along the energy contours of phase space to predict the dynamics of the system (in the figure below, we intentionally "add energy" halfway through).
+$$
+\frac{d\mathbf{q}_i}{dt} = \frac{\partial H}{\partial \mathbf{p}_i}, \qquad \frac{d\mathbf{p}_i}{dt} = -\frac{\partial H}{\partial \mathbf{q}_i}
+$$
 
-![integrate-latent-hnn.png](static/integrate-latent-hnn.png)
+Any motion generated this way conserves $H$ exactly.
 
-5. After integrating in latent space, we can project back into pixel space to simulate the dynamics of the system.
+### The two models
 
-![pendulum-compare-labeled.gif](static/pend-compare.gif)
+Both are small fully connected networks (18 inputs, two hidden layers of 200 units, tanh), trained to match the true time derivatives $\dot{\mathbf{x}}$ of the state with a mean-squared-error loss.
 
-Here's what it looks like when we add energy halfway through the simulation:
+- The **baseline** outputs the 18 time derivatives directly. Nothing forces its predictions to conserve energy.
+- The **HNN** outputs a single number $H_\theta(\mathbf{x})$, and its prediction is the gradient of that number, rearranged by a fixed matrix $M$ that pairs each position with its momentum:
 
-![pendulum-compare-labeled.gif](static/addenergy.gif)
+$$
+\hat{\dot{\mathbf{x}}} = \nabla_{\mathbf{x}} H_\theta \, M
+$$
 
-Modeling larger systems
---------
+Whatever function the HNN learns, the motion it predicts conserves that function. When $H_\theta$ is close to the true energy, the true energy is nearly conserved as well.
 
-We can also model larger systems -- systems with more than one pair of canonical coordinates. The two-body problem, for example, has four coordinate pairs.
+### What changed from the original 2D code
 
-![orbits-compare.gif](static/orbits-compare.gif)
+- **3D state and symplectic matrix.** The state holds 3D positions and momenta for each body, and $M$ is block-diagonal with one block per body (`hnn3d.py`).
+- **Genuinely 3D orbits.** Starting from a near-circular equilateral configuration, each body gets a random velocity kick perpendicular to the orbital plane, so the bodies leave their starting plane, and the whole system is then randomly rotated. Without the kick, three bodies stay in one plane forever.
+- **Close encounters filtered out.** Orbits in which any time derivative exceeds 20 are discarded and regenerated, since near-collisions produce forces large enough to dominate training. About 2 to 3% of orbits are affected.
+- **Parallel data generation**, and a multi-seed evaluation of derivative error, energy drift and the comparison with numerical methods.
 
+## Repository layout
 
-Numbers
---------
+| Path | Contents |
+|---|---|
+| `local_3body_notebook.ipynb` | Walkthrough notebook: background, data, training, plots and results |
+| `hnn3d.py` | The HNN and baseline models for the 3D system |
+| `nn_models.py`, `utils.py` | Network definition and helpers, from the original repository |
+| `experiment-3body/3D/data3dcanonical.py` | Orbit generation, physics and dataset building |
+| `experiment-3body/3D/make_3d_dataset.py` | Builds and saves the dataset |
+| `experiment-3body/3D/train3DtestcodeTesting.py` | Trains one baseline and one HNN |
+| `experiment-3body/3D/visuals3dcanonical.py` | Plotting functions used by the notebook |
+| `experiment-3body/3D/run_seeds.py` | Trains 5 models of each kind and measures derivative error |
+| `experiment-3body/3D/energy_drift.py` | Measures energy drift over rollouts |
+| `experiment-3body/3D/compare_methods.py` | Compares the networks with RK4 and leapfrog |
+| `experiment-3body/2D/`, `hnn.py` | The original 2D three-body code, kept for reference |
 
-### Train loss
-* Choose data of the form `x=[x0, x1,...]` and `dx=[dx0, dx1,...]` where `dx` is the time derivative of `x`
-* Let `dx' = model.time_derivative(x)`
-* Compute L2 distance between `dx` and `dx'`
+## Running it
 
-|               	| Baseline NN 		| Hamiltonian NN 	|
-| ------------- 	| :---------------: | :---------------: |
-| Ideal mass-spring |  	3.7134e-02 +/- 1.9143e-03 | 3.6933e-02 +/- 1.9128e-03 		|
-| Ideal pendulum 	|   3.2606e-02 +/- 1.7434e-03 | 3.2787e-02 +/- 1.7567e-03 		|
-| Real pendulum 	|   2.7455e-03 +/- 2.0735e-04 | 9.2376e-03 +/- 5.0263e-04 		|
-| 2 body problem 	|   3.2682e-05 +/- 1.2022e-06 | 2.9959e-06 +/- 6.5500e-08		|
-| 3 body problem 	|   9.5573e-02 +/- 6.5610e-02 | 8.0346e-02 +/- 2.1470e-02		|
-| Pixel pendulum 	|   1.7731e-04 +/- 2.4202e-06 | 1.8683e-04 +/- 2.4238e-06 		|
+Requires Python 3.11. From the repository root, create an environment and install the dependencies:
 
+```bash
+python -m venv .venv
+```
 
-### Test loss
-Do the same thing with test data
+```bash
+pip install -r requirements.txt
+```
 
-|               	| Baseline NN 			| Hamiltonian NN 	|
-| ------------- 	| :-------------------: | :---------------: |
-| Ideal mass-spring |  	3.6656e-02 +/- 1.8652e-03 | **3.5928e-02 +/- 1.8328e-03** 	|
-| Ideal pendulum 	|   **3.5273e-02 +/- 1.7970e-03** | 3.5586e-02 +/- 1.8178e-03 	|
-| Real pendulum 	|   **2.1864e-03 +/- 3.3296e-04** | **5.9584e-03 +/- 6.1798e-04** 	|
-| 2 body problem 	|   2.9575e-05 +/- 8.8900e-07 | **2.8218e-06 +/- 4.2020e-08** 	|
-| 3 body problem 	|   **3.8000e-01 +/- 4.1612e-01**  	| 4.8809e-01 +/- 4.7745e-01	|
-| Pixel pendulum 	|   **1.7306e-04 +/- 3.2413e-06**   | 1.8451e-04 +/- 3.3422e-06 |
+Activate the environment between those two commands: `.venv\Scripts\Activate.ps1` on Windows, or `source .venv/bin/activate` on macOS and Linux.
 
-### Energy MSE
-* Choose a trajectory `[x0, x1,...]` from test data
-* Use RK4 integration to estimate `[x0', x1',...]` using the model
-* Compute the L2 distance between `[energy(x0), energy(x1),...]` and `[energy(x0'), energy(x1'),...]`
+The notebook runs everything in order. To run the steps from a terminal instead:
 
-|               	| Baseline NN 			| Hamiltonian NN	|
-| ------------- 	| :-------------------:	| :---------------:	|
-| Ideal mass-spring | 1.7077e-01 +/- 2.06e-02  | **3.8416e-04 +/- 6.53e-05** |
-| Ideal pendulum 	| 4.1519e-02 +/- 9.62e-03  | **2.4852e-02 +/- 5.42e-03** |
-| Real pendulum 	| 3.8564e-01 +/- 6.92e-02  | **1.4477e-02 +/- 4.65e-03**	|
-| 2 body problem 	| 6.3276e-02 +/- 3.36e-02  | **3.8751e-05 +/- 5.04e-06** |
-| 3 body problem 	| 1.0906e+02 +/- 7.74e+01  | **4.1926e-02 +/- 3.39e-02**	|
-| Pixel pendulum 	| 9.2748e-03 +/- 1.14e-03  | **1.5315e-04 +/- 8.42e-06** 	|
+```bash
+python experiment-3body/3D/make_3d_dataset.py
+```
 
+```bash
+python experiment-3body/3D/run_seeds.py --test_trials 2000
+```
 
-Dependencies
---------
- * OpenAI Gym
- * PyTorch
- * NumPy
- * ImageIO
- * Scipy
- 
-This project is written in Python 3.
+```bash
+python experiment-3body/3D/energy_drift.py
+```
+
+```bash
+python experiment-3body/3D/compare_methods.py
+```
+
+Building the dataset takes about a minute, and training the 10 models in `run_seeds.py` takes 15 to 20 minutes on a laptop CPU. The last two scripts read the saved models and take under a minute each. The amount of out-of-plane motion is set by `OUT_OF_PLANE_NOISE` in `data3dcanonical.py`; the results above use 0.5.
+
+## Limitations
+
+- **Close encounters** were removed from training, and neither network handles them.
+- **Absolute accuracy** is limited. By $t = 5$ the HNN's energy is off by about 13% and its body positions by about 0.7, on orbits of radius about 1.
+- **Rollouts stop at $t = 5$**, the length of the training orbits.
+- **The seeds vary training only.** All seeds share the same training and test data, so the reported spread does not include variation in the data.
+- **The size of the HNN's advantage depends on the orbits.** With a smaller out-of-plane kick (0.2), its lead was larger: 3.5 times on derivative error and about 20 times on energy drift.
+- **The learned function has the opposite sign to the energy.** With $M$ as defined in `hnn3d.py`, the network learns approximately $-H$. The predicted motion is unaffected.
+
+## Acknowledgements
+
+This repository is a fork of [greydanus/hamiltonian-nn](https://github.com/greydanus/hamiltonian-nn), the code for:
+
+> S. Greydanus, M. Dzamba and J. Yosinski, *Hamiltonian Neural Networks*, Advances in Neural Information Processing Systems 32 (2019). [arXiv:1906.01563](https://arxiv.org/abs/1906.01563)
+
+The network, training loop and 2D three-body code come from that repository. The 3D extension, data generation, evaluation scripts and notebook are new. The original code is released under the Apache License 2.0 (see `LICENSE`), and this fork is distributed under the same licence.
